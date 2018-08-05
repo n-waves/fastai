@@ -2,6 +2,12 @@ import fire
 from fastai.text import *
 from fastai.lm_rnn import *
 
+from sampled_sm import *
+import sentencepiece as sp
+
+
+EOS_ID = 3
+
 
 class EarlyStopping(Callback):
     def __init__(self, learner, save_path, enc_path=None, patience=5):
@@ -34,7 +40,7 @@ class EarlyStopping(Callback):
 def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_id='', bs=64,
              dropmult=1.0, backwards=False, lr=4e-3, preload=True, bpe=False, startat=0,
              use_clr=True, use_regular_schedule=False, use_discriminative=True, notrain=False, joined=False,
-             train_file_id='', early_stopping=False):
+             train_file_id='', early_stopping=False, sentence_piece_model='', sampled=True):
     print(f'dir_path {dir_path}; pretrain_path {pretrain_path}; cuda_id {cuda_id}; '
           f'pretrain_id {pretrain_id}; cl {cl}; bs {bs}; backwards {backwards} '
           f'dropmult {dropmult}; lr {lr}; preload {preload}; bpe {bpe};'
@@ -80,27 +86,36 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
 
     if bpe:
         vs=30002
+    elif sentence_piece_model != '':
+        spp = sp.SentencePieceProcessor()
+        spp.Load(sentence_piece_model)
+        vs = spp.GetPieceSize()  #len(itos)
+        tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split(' ')) + (val_lm == EOS_ID).sum())
+        print(f'Tokens to words fraction: {tokens_fraction}')
     else:
         itos = pickle.load(open(dir_path / 'tmp' / 'itos.pkl', 'rb'))
         vs = len(itos)
 
     trn_dl = LanguageModelLoader(trn_lm, bs, bptt)
-    val_dl = LanguageModelLoader(val_lm, bs, bptt)
+    val_dl = LanguageModelLoader(val_lm, bs//5 if sampled else bs, bptt)
     md = LanguageModelData(dir_path, 1, vs, trn_dl, val_dl, bs=bs, bptt=bptt)
 
     drops = np.array([0.25, 0.1, 0.2, 0.02, 0.15])*dropmult
 
-    learner = md.get_model(opt_fn, em_sz, nh, nl,
-        dropouti=drops[0], dropout=drops[1], wdrop=drops[2], dropoute=drops[3], dropouth=drops[4])
-    learner.reg_fn = partial(seq2seq_reg, alpha=2, beta=1)
-    learner.clip=0.3
+    # learner = md.get_model(opt_fn, em_sz, nh, nl,
+    #     dropouti=drops[0], dropout=drops[1], wdrop=drops[2], dropoute=drops[3], dropouth=drops[4])
+    # learner.reg_fn = partial(seq2seq_reg, alpha=2, beta=1)
+    # learner.clip=0.3
+
+    tprs = get_prs(trn_lm, vs)
+    learner,crit = get_learner(drops, 15000, sampled, md, em_sz, nh, nl, opt_fn, tprs)
     learner.metrics = [accuracy]
     wd=1e-7
 
     lrs = np.array([lr/6,lr/3,lr,lr/2]) if use_discriminative else lr
     if preload and startat == 0:
         wgts = torch.load(pre_lm_path, map_location=lambda storage, loc: storage)
-        if bpe:
+        if bpe or sentence_piece_model != '':
             learner.model.load_state_dict(wgts)
         else:
             print(f'Loading pretrained weights...')

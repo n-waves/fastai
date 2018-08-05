@@ -2,10 +2,23 @@ import fire
 from fastai.text import *
 
 from sampled_sm import *
+import sentencepiece as sp
+
+
+UNK_ID = 0
+PAD_ID = 1
+BOS_ID = 2
+EOS_ID = 3
+
+
+# def get_word_loss(tokens_fraction):
+#     def word_loss(preds, targets):
+#         return F.cross_entropy(preds, targets) * tokens_fraction
+#     return word_loss
 
 
 def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=True,
-             pretrain_id=''):
+             pretrain_id='', sentence_piece_model='sp-100k.model'):
     print(f'dir_path {dir_path}; cuda_id {cuda_id}; cl {cl}; bs {bs}; '
           f'backwards {backwards}; lr {lr}; sampled {sampled}; '
           f'pretrain_id {pretrain_id}')
@@ -30,8 +43,12 @@ def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=T
     trn_lm = np.concatenate(trn_lm)
     val_lm = np.concatenate(val_lm)
 
-    itos = pickle.load(open(p / 'tmp/itos.pkl', 'rb'))
-    vs = len(itos)
+    #itos = pickle.load(open(p / 'tmp/itos.pkl', 'rb'))
+    spp = sp.SentencePieceProcessor()
+    spp.Load(sentence_piece_model)
+    vs = spp.GetPieceSize()  #len(itos)
+    tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split()) + (val_lm == EOS_ID).sum())
+    print(f'Tokens to words fraction: {tokens_fraction}')
 
     trn_dl = LanguageModelLoader(trn_lm, bs, bptt)
     val_dl = LanguageModelLoader(val_lm, bs//5 if sampled else bs, bptt)
@@ -46,7 +63,7 @@ def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=T
     lrs = np.array([lr/6,lr/3,lr,lr])
     #lrs=lr
 
-    learner.fit(lrs, 1, wds=wd, use_clr=(32,10), cycle_len=cl)
+    learner.fit(lrs, 1, wds=wd, use_clr=(32,10), cycle_len=cl, best_save_name=f'best_{PRE}{pretrain_id}')
     learner.save(f'{PRE}{pretrain_id}')
     learner.save_encoder(f'{PRE}{pretrain_id}_enc')
 
