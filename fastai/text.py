@@ -152,14 +152,17 @@ class LanguageModelLoader():
     The first batch returned is always bptt+25; the max possible width.  This is done because of they way that pytorch
     allocates cuda memory in order to prevent multiple buffers from being created as the batch width grows.
     """
-    def __init__(self, nums, bs, bptt, backwards=False):
+    def __init__(self, nums, bs, bptt, backwards=False, batch_sets=1):
         self.bs,self.bptt,self.backwards = bs,bptt,backwards
-        self.data = self.batchify(nums)
-        self.i,self.iter = 0,0
-        self.n = len(self.data)
+        self.batch_sets = batch_sets
+        self.all_data = self.batchify(nums)
+        self.data = None
+        self.i,self.iter, self.batch_set = 0,0,0
+        self.n = len(self.all_data) // batch_sets
 
     def __iter__(self):
         self.i,self.iter = 0,0
+        self.prepare_next_batch_set()
         while self.i < self.n-1 and self.iter<len(self):
             if self.i == 0:
                 seq_len = self.bptt + 5 * 5
@@ -175,10 +178,19 @@ class LanguageModelLoader():
 
     def batchify(self, data):
         nb = data.shape[0] // self.bs
+        nb = nb // self.batch_sets * self.batch_sets
         data = np.array(data[:nb*self.bs])
         data = data.reshape(self.bs, -1).T
         if self.backwards: data=data[::-1]
-        return T(data)
+        return T(data, cuda=False)  # .pin_memory()
+
+    def prepare_next_batch_set(self):
+        data = self.all_data[self.batch_set * self.n : (self.batch_set + 1) * self.n]
+        if self.data is None:
+            self.data = T(data)
+        elif self.batch_sets > 1:
+            self.data.copy_(data, non_blocking=True)
+        self.batch_set = (self.batch_set + 1) % self.batch_sets
 
     def get_batch(self, i, seq_len):
         source = self.data

@@ -40,12 +40,12 @@ class EarlyStopping(Callback):
 def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_id='', bs=64,
              dropmult=1.0, backwards=False, lr=4e-3, preload=True, bpe=False, startat=0,
              use_clr=True, use_regular_schedule=False, use_discriminative=True, notrain=False, joined=False,
-             train_file_id='', early_stopping=False, sentence_piece_model='', sampled=True):
+             train_file_id='', early_stopping=False, sentence_piece_model='', sampled=True, batch_sets=1):
     print(f'dir_path {dir_path}; pretrain_path {pretrain_path}; cuda_id {cuda_id}; '
           f'pretrain_id {pretrain_id}; cl {cl}; bs {bs}; backwards {backwards} '
           f'dropmult {dropmult}; lr {lr}; preload {preload}; bpe {bpe};'
           f'startat {startat}; use_clr {use_clr}; notrain {notrain}; joined {joined} '
-          f'early stopping {early_stopping}')
+          f'early stopping {early_stopping} batch_sets {batch_sets}')
 
     if not hasattr(torch._C, '_cuda_setDevice'):
         print('CUDA not available. Setting device=-1.')
@@ -80,7 +80,8 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
 
     print(f'Loading {trn_lm_path} and {val_lm_path}')
     trn_lm = np.load(trn_lm_path)
-    trn_lm = np.concatenate(trn_lm)
+    if trn_lm.ndim > 1:
+        trn_lm = np.concatenate(trn_lm)
     val_lm = np.load(val_lm_path)
     val_lm = np.concatenate(val_lm)
 
@@ -89,15 +90,15 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
     elif sentence_piece_model != '':
         spp = sp.SentencePieceProcessor()
         spp.Load(sentence_piece_model)
-        vs = spp.GetPieceSize()  #len(itos)
+        vs = spp.GetPieceSize() #len(itos)
         tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split(' ')) + (val_lm == EOS_ID).sum())
         print(f'Tokens to words fraction: {tokens_fraction}')
     else:
         itos = pickle.load(open(dir_path / 'tmp' / 'itos.pkl', 'rb'))
         vs = len(itos)
 
-    trn_dl = LanguageModelLoader(trn_lm, bs, bptt)
-    val_dl = LanguageModelLoader(val_lm, bs//5 if sampled else bs, bptt)
+    trn_dl = LanguageModelLoader(trn_lm, bs, bptt, batch_sets=batch_sets)
+    val_dl = LanguageModelLoader(val_lm, bs//5 if sampled else bs, bptt, batch_sets=1)
     md = LanguageModelData(dir_path, 1, vs, trn_dl, val_dl, bs=bs, bptt=bptt)
 
     drops = np.array([0.25, 0.1, 0.2, 0.02, 0.15])*dropmult
