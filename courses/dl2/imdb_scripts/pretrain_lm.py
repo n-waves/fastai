@@ -18,10 +18,10 @@ EOS_ID = 3
 
 
 def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=True,
-             pretrain_id='', sentence_piece_model='sp-100k.model', batch_sets=1):
+             pretrain_id='', sentence_piece_model='sp-100k.model', batch_sets=1, em_sz=400, nh=1150, nl=3):
     print(f'dir_path {dir_path}; cuda_id {cuda_id}; cl {cl}; bs {bs}; '
           f'backwards {backwards}; lr {lr}; sampled {sampled}; '
-          f'pretrain_id {pretrain_id} batch_sets {batch_sets}')
+          f'pretrain_id {pretrain_id} batch_sets {batch_sets} em_sz {em_sz} nh {nh} nl {nl}')
     if not hasattr(torch._C, '_cuda_setDevice'):
         print('CUDA not available. Setting device=-1.')
         cuda_id = -1
@@ -31,7 +31,7 @@ def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=T
     p = Path(dir_path)
     assert p.exists(), f'Error: {p} does not exist.'
     bptt=70
-    em_sz,nh,nl = 400,1150,3
+
     opt_fn = partial(optim.Adam, betas=(0.8, 0.99))
 
     if backwards:
@@ -40,13 +40,13 @@ def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=T
     else:
         trn_lm = np.load(p / f'tmp/trn_{IDS}.npy')
         val_lm = np.load(p / f'tmp/val_{IDS}.npy')
-    if trn_lm.ndim > 1:
-        trn_lm = np.concatenate(trn_lm)
+    #if trn_lm.ndim > 1:
+    trn_lm = np.concatenate(trn_lm)
     val_lm = np.concatenate(val_lm)
 
     #itos = pickle.load(open(p / 'tmp/itos.pkl', 'rb'))
     spp = sp.SentencePieceProcessor()
-    spp.Load(sentence_piece_model)
+    spp.Load(str(p / 'tmp' / sentence_piece_model))
     vs = spp.GetPieceSize()  #len(itos)
     tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split()) + (val_lm == EOS_ID).sum())
     print(f'Tokens to words fraction: {tokens_fraction}')
@@ -61,7 +61,7 @@ def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=T
     wd=1e-7
     learner.metrics = [accuracy]
 
-    lrs = np.array([lr/6,lr/3,lr,lr])
+    lrs = np.array([lr/6,lr/3]+[lr]*(nl-1))
     #lrs=lr
 
     learner.fit(lrs, 1, wds=wd, use_clr=(32,10), cycle_len=cl, best_save_name=f'best_{PRE}{pretrain_id}')

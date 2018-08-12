@@ -40,12 +40,13 @@ class EarlyStopping(Callback):
 def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_id='', bs=64,
              dropmult=1.0, backwards=False, lr=4e-3, preload=True, bpe=False, startat=0,
              use_clr=True, use_regular_schedule=False, use_discriminative=True, notrain=False, joined=False,
-             train_file_id='', early_stopping=False, sentence_piece_model='', sampled=True, batch_sets=1):
+             train_file_id='', early_stopping=False, sentence_piece_model='', sampled=True, batch_sets=1,
+             em_sz=400, nh=1150, nl=3):
     print(f'dir_path {dir_path}; pretrain_path {pretrain_path}; cuda_id {cuda_id}; '
           f'pretrain_id {pretrain_id}; cl {cl}; bs {bs}; backwards {backwards} '
           f'dropmult {dropmult}; lr {lr}; preload {preload}; bpe {bpe};'
           f'startat {startat}; use_clr {use_clr}; notrain {notrain}; joined {joined} '
-          f'early stopping {early_stopping} batch_sets {batch_sets}')
+          f'early stopping {early_stopping} batch_sets {batch_sets} em_sz {em_sz} nh {nh} nl {nl}')
 
     if not hasattr(torch._C, '_cuda_setDevice'):
         print('CUDA not available. Setting device=-1.')
@@ -68,7 +69,7 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
         assert p.exists(), f'Error: {p} does not exist.'
 
     bptt=70
-    em_sz,nh,nl = 400,1150,3
+
     opt_fn = partial(optim.Adam, betas=(0.8, 0.99))
 
     if backwards:
@@ -80,8 +81,8 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
 
     print(f'Loading {trn_lm_path} and {val_lm_path}')
     trn_lm = np.load(trn_lm_path)
-    if trn_lm.ndim > 1:
-        trn_lm = np.concatenate(trn_lm)
+    #if trn_lm.ndim > 1:
+    trn_lm = np.concatenate(trn_lm)
     val_lm = np.load(val_lm_path)
     val_lm = np.concatenate(val_lm)
 
@@ -89,7 +90,7 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
         vs=30002
     elif sentence_piece_model != '':
         spp = sp.SentencePieceProcessor()
-        spp.Load(sentence_piece_model)
+        spp.Load(str(dir_path / 'tmp' / sentence_piece_model))
         vs = spp.GetPieceSize() #len(itos)
         tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split(' ')) + (val_lm == EOS_ID).sum())
         print(f'Tokens to words fraction: {tokens_fraction}')

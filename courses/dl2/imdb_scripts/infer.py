@@ -41,9 +41,10 @@ def predict(lm, dl, spp):
     return loss
 
 
-def infer(dir_path, test_set, cuda_id, bs=64, pretrain_id='', sentence_piece_model='sp-100k.model'):
+def infer(dir_path, test_set, cuda_id, bs=64, pretrain_id='', sentence_piece_model='sp-100k.model', correct_for_up=True,
+          limit=None, em_sz=400, nh=1150, nl=3):
     print(f'dir_path {dir_path}; cuda_id {cuda_id}; bs {bs}; '
-          f'pretrain_id {pretrain_id}')
+          f'pretrain_id {pretrain_id} em_sz {em_sz} nh {nh} nl {nl}')
     if not hasattr(torch._C, '_cuda_setDevice'):
         print('CUDA not available. Setting device=-1.')
         cuda_id = -1
@@ -56,12 +57,13 @@ def infer(dir_path, test_set, cuda_id, bs=64, pretrain_id='', sentence_piece_mod
 
     assert p.exists(), f'Error: {p} does not exist.'
     bptt=70
-    em_sz,nh,nl = 400,1150,3
+
 
     test_ids = np.load(p / test_set)
     if isinstance(test_ids[0], list):
         test_ids = [np.array(x) for x in test_ids]
-    test_ids = test_ids  # [::1000]
+    if limit is not None:
+        test_ids = test_ids[::limit]
 
     test_ds = LMTextDataset(test_ids)
     test_samp = SortSampler(test_ids, key=lambda x: len(test_ids[x]))
@@ -69,10 +71,13 @@ def infer(dir_path, test_set, cuda_id, bs=64, pretrain_id='', sentence_piece_mod
     md = ModelData(dir_path, None, test_dl)
 
     spp = sp.SentencePieceProcessor()
-    spp.Load(sentence_piece_model)
+    spp.Load(str(p / 'tmp' / sentence_piece_model))
     vs = spp.GetPieceSize()
-    tokens_total = (len(spp.DecodeIds(np.concatenate(test_ids).tolist()).split(' ')) + (np.concatenate(test_ids) == EOS_ID).sum())
-
+    if correct_for_up:
+        tokens_total = (len(spp.DecodeIds(np.concatenate(test_ids).tolist()).split(' ')) + (
+                np.concatenate(test_ids) == EOS_ID).sum() - (np.concatenate(test_ids) == 4).sum())
+    else:
+        tokens_total = (len(spp.DecodeIds(np.concatenate(test_ids).tolist()).split(' ')) + (np.concatenate(test_ids) == EOS_ID).sum())
     lm = get_lm(bptt, 1000000, vs, em_sz, nh, nl, PAD_ID)
     lm = to_gpu(lm)
     load_model(lm[0], lm_path)
