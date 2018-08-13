@@ -63,8 +63,10 @@ def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=T
 
     lrs = np.array([lr/6,lr/3]+[lr]*(nl-1))
     #lrs=lr
-
-    learner.fit(lrs, 1, wds=wd, use_clr=(32,10), cycle_len=cl, best_save_name=f'best_{PRE}{pretrain_id}')
+    best=f'best_{PRE}{pretrain_id}'
+    if Path(learner.get_model_path(best)).exists():
+        learner.load(best)
+    learner.fit(lrs, 1, wds=wd, use_clr=(32,10), cycle_len=cl, best_save_name=best)
     learner.save(f'{PRE}{pretrain_id}')
     learner.save_encoder(f'{PRE}{pretrain_id}_enc')
 
