@@ -9,7 +9,7 @@ UNK_ID = 0
 PAD_ID = 1
 BOS_ID = 2
 EOS_ID = 3
-
+UP_ID  = 4
 
 # def get_word_loss(tokens_fraction):
 #     def word_loss(preds, targets):
@@ -18,7 +18,7 @@ EOS_ID = 3
 
 
 def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=True,
-             pretrain_id='', sentence_piece_model='sp-100k.model', batch_sets=1, em_sz=400, nh=1150, nl=3):
+             pretrain_id='', sentence_piece_model='sp-100k.model', batch_sets=1, em_sz=400, nh=1150, nl=3, nth=1):
     print(f'dir_path {dir_path}; cuda_id {cuda_id}; cl {cl}; bs {bs}; '
           f'backwards {backwards}; lr {lr}; sampled {sampled}; '
           f'pretrain_id {pretrain_id} batch_sets {batch_sets} em_sz {em_sz} nh {nh} nl {nl}')
@@ -41,14 +41,17 @@ def train_lm(dir_path, cuda_id, cl=1, bs=64, backwards=False, lr=3e-4, sampled=T
         trn_lm = np.load(p / f'tmp/trn_{IDS}.npy')
         val_lm = np.load(p / f'tmp/val_{IDS}.npy')
     #if trn_lm.ndim > 1:
-    trn_lm = np.concatenate(trn_lm)
-    val_lm = np.concatenate(val_lm)
+    trn_lm = np.concatenate(trn_lm[::nth])
+    val_lm = np.concatenate(val_lm[::nth])
 
     #itos = pickle.load(open(p / 'tmp/itos.pkl', 'rb'))
     spp = sp.SentencePieceProcessor()
     spp.Load(str(p / 'tmp' / sentence_piece_model))
     vs = spp.GetPieceSize()  #len(itos)
-    tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split()) + (val_lm == EOS_ID).sum())
+    tokens_total = (len(spp.DecodeIds(val_lm.tolist()).split()) + (val_lm == EOS_ID).sum())
+    if spp.IdToPiece(UP_ID) == '<up>':
+      tokens_total -= (val_lm == UP_ID).sum()
+    tokens_fraction = float(len(val_lm)) / tokens_total
     print(f'Tokens to words fraction: {tokens_fraction}')
 
     trn_dl = LanguageModelLoader(trn_lm, bs, bptt, batch_sets=batch_sets)
