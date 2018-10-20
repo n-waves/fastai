@@ -81,11 +81,11 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
 #        trn_lm_path = dir_path / 'tmp' / f'trn_{joined_id}{IDS}{train_file_id}.npy'
 #        val_lm_path = dir_path / 'tmp' / f'val_{joined_id}{IDS}.npy'
 ###
-    with open(dir_path / 'tmp' / f'train.txt', 'r') as f:
+    with open(dir_path / 'tmp' / f'train_sentences.txt', 'r') as f:
         rows = [line.split('\t') for line in f.readlines()]
     sentences = [row[0] for row in rows]
 
-    trn_sent, val_sent = train_test_split(sentences, test_size=0.1, random_state=12345)
+    trn_sent, val_sent = train_test_split(sentences, test_size=0.025, random_state=12345)
 
     spp = sp.SentencePieceProcessor()
     spp.Load(str(dir_path / 'tmp' / sentence_piece_model))

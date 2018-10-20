@@ -1,22 +1,70 @@
 import fire
 from fastai.text import *
 from fastai.lm_rnn import *
+from sklearn.model_selection import train_test_split
+import sentencepiece as sp
+from spdatasets import *
+from sklearn.metrics import f1_score, precision_score, recall_score
 
+def macro_f1(preds, targs):
+    preds = torch.max(preds, dim=1)[1].cpu().numpy()
+    targs = targs.cpu().numpy()
+    pa = precision_score(targs, preds, average='macro')
+    ra = recall_score(targs, preds, average='macro')
+    return 2/(1/pa + 1/ra)
 
 def freeze_all_but(learner, n):
     c=learner.get_layer_groups()
     for l in c: set_trainable(l, False)
     set_trainable(c[n], True)
 
+# FOCAL
+def one_hot(index, classes):
+    size = index.size() + (classes,)
+    view = index.size() + (1,)
+
+    mask = torch.Tensor(*size).cuda().fill_(0)
+    index = index.view(*view)
+    ones = 1.
+
+    if isinstance(index, Variable):
+        ones = Variable(torch.Tensor(index.size()).cuda().fill_(1))
+        mask = Variable(mask)
+
+    return mask.scatter_(1, index, ones)
+
+def focal_loss(input, target):
+    eps, gamma = 1e-7, 2.5
+    y = one_hot(target, input.size(-1))
+    logit = F.softmax(input, dim=-1)
+    logit = logit.clamp(eps, 1. - eps)
+
+    ll = logit.log()
+
+    loss = -y
+    loss = loss * ll # cross entropy
+    loss = loss * (1 - logit) ** gamma # focal loss
+
+    return loss.mean()
+# FOCAL
+
+def weighted_cross_entropy(*args,**kwargs):
+  return F.cross_entropy(*args, **kwargs, weight=torch.cuda.FloatTensor([0.5, 30]))
+
+class Weighted_RNN_Learner(RNN_Learner):
+    def __init__(self, data, models, **kwargs):
+        super().__init__(data, models, **kwargs)
+
+    def _get_crit(self, data): return weighted_cross_entropy
 
 def train_clas(dir_path, cuda_id, lm_id='', clas_id=None, bs=64, cl=1, backwards=False, startat=0, unfreeze=True,
                lr=0.01, dropmult=1.0, bpe=False, use_clr=True,
                use_regular_schedule=False, use_discriminative=True, last=False, chain_thaw=False,
-               from_scratch=False, train_file_id=''):
+               from_scratch=False, train_file_id='', nl=3, sentence_piece_model=None, sp_alpha=0.1, sp_n=64, wd=1e-6):
     print(f'dir_path {dir_path}; cuda_id {cuda_id}; lm_id {lm_id}; clas_id {clas_id}; bs {bs}; cl {cl}; backwards {backwards}; '
         f'dropmult {dropmult} unfreeze {unfreeze} startat {startat}; bpe {bpe}; use_clr {use_clr};'
         f'use_regular_schedule {use_regular_schedule}; use_discriminative {use_discriminative}; last {last};'
-        f'chain_thaw {chain_thaw}; from_scratch {from_scratch}; train_file_id {train_file_id}')
+        f'chain_thaw {chain_thaw}; from_scratch {from_scratch}; train_file_id {train_file_id} sp_alpha {sp_alpha} sp_n {sp_n}')
     if not hasattr(torch._C, '_cuda_setDevice'):
         print('CUDA not available. Setting device=-1.')
         cuda_id = -1
@@ -32,22 +80,38 @@ def train_clas(dir_path, cuda_id, lm_id='', clas_id=None, bs=64, cl=1, backwards
     clas_id = clas_id if clas_id == '' else f'{clas_id}_'
     intermediate_clas_file = f'{PRE}{clas_id}clas_0'
     final_clas_file = f'{PRE}{clas_id}clas_1'
+    best_clas_file = f'{PRE}{clas_id}best_clas_1'
     lm_file = f'{PRE}{lm_id}lm_enc'
     lm_path = dir_path / 'models' / f'{lm_file}.h5'
     assert lm_path.exists(), f'Error: {lm_path} does not exist.'
 
-    bptt,em_sz,nh,nl = 70,400,1150,3
+    bptt,em_sz,nh = 70,400,1150
     opt_fn = partial(optim.Adam, betas=(0.8, 0.99))
 
-    if backwards:
-        trn_sent = np.load(dir_path / 'tmp' / f'trn_{IDS}{train_file_id}_bwd.npy')
-        val_sent = np.load(dir_path / 'tmp' / f'val_{IDS}_bwd.npy')
-    else:
-        trn_sent = np.load(dir_path / 'tmp' / f'trn_{IDS}{train_file_id}.npy')
-        val_sent = np.load(dir_path / 'tmp' / f'val_{IDS}.npy')
+#######
+#    if backwards:
+#        trn_sent = np.load(dir_path / 'tmp' / f'trn_{IDS}{train_file_id}_bwd.npy')
+#        val_sent = np.load(dir_path / 'tmp' / f'val_{IDS}_bwd.npy')
+#    else:
+#        trn_sent = np.load(dir_path / 'tmp' / f'trn_{IDS}{train_file_id}.npy')
+#        val_sent = np.load(dir_path / 'tmp' / f'val_{IDS}.npy')
+#
+#    trn_lbls = np.load(dir_path / 'tmp' / f'lbl_trn{train_file_id}.npy')
+#    val_lbls = np.load(dir_path / 'tmp' / f'lbl_val.npy')
+#
+####
+    with open(dir_path / 'tmp' / f'train.txt', 'r') as f:
+        rows = [line.split('\t') for line in f.readlines()]
+    sentences = [row[0] for row in rows]
+    labels = np.array([[int(row[1] != 'OTHER')] for row in rows])
 
-    trn_lbls = np.load(dir_path / 'tmp' / f'lbl_trn{train_file_id}.npy')
-    val_lbls = np.load(dir_path / 'tmp' / f'lbl_val.npy')
+    trn_sent, val_sent, trn_lbls, val_lbls = train_test_split(sentences, labels, test_size=0.1, random_state=12345)
+
+    spp = sp.SentencePieceProcessor()
+    spp.Load(str(dir_path / 'tmp' / sentence_piece_model))
+    spp.SetEncodeExtraOptions("bos:eos:reverse" if backwards else "bos:eos")
+    vs = spp.GetPieceSize()
+####
     assert trn_lbls.shape[1] == 1 and val_lbls.shape[1] == 1, 'This classifier uses cross entropy loss and only support single label samples'
     trn_lbls = trn_lbls.flatten()
     val_lbls = val_lbls.flatten()
@@ -55,13 +119,14 @@ def train_clas(dir_path, cuda_id, lm_id='', clas_id=None, bs=64, cl=1, backwards
     val_lbls -= val_lbls.min()
     c=int(trn_lbls.max())+1
 
-    if bpe: vs=30002
-    else:
-        itos = pickle.load(open(dir_path / 'tmp' / 'itos.pkl', 'rb'))
-        vs = len(itos)
+#    if bpe: vs=30002
+#    else:
+#        itos = pickle.load(open(dir_path / 'tmp' / 'itos.pkl', 'rb'))
+#        vs = len(itos)
 
-    trn_ds = TextDataset(trn_sent, trn_lbls)
-    val_ds = TextDataset(val_sent, val_lbls)
+    #trn_ds = SampleEncodeDataset(spp, trn_sent, trn_lbls, sp_alpha, sp_n)
+    trn_ds = BestEncodeDataset(spp, trn_sent, trn_lbls)
+    val_ds = BestEncodeDataset(spp, val_sent, val_lbls)
     trn_samp = SortishSampler(trn_sent, key=lambda x: len(trn_sent[x]), bs=bs//2)
     val_samp = SortSampler(val_sent, key=lambda x: len(val_sent[x]))
     trn_dl = DataLoader(trn_ds, bs//2, transpose=True, num_workers=1, pad_idx=1, sampler=trn_samp)
@@ -77,17 +142,17 @@ def train_clas(dir_path, cuda_id, lm_id='', clas_id=None, bs=64, cl=1, backwards
               layers=[em_sz*3, 50, c], drops=[dps[4], 0.1],
               dropouti=dps[0], wdrop=dps[1], dropoute=dps[2], dropouth=dps[3])
 
-    learn = RNN_Learner(md, TextModel(to_gpu(m)), opt_fn=opt_fn)
+    learn = Weighted_RNN_Learner(md, TextModel(to_gpu(m)), opt_fn=opt_fn)
     learn.reg_fn = partial(seq2seq_reg, alpha=2, beta=1)
     learn.clip=25.
-    learn.metrics = [accuracy]
+    learn.metrics = [macro_f1, accuracy]
 
     lrm = 2.6
     if use_discriminative:
-        lrs = np.array([lr/(lrm**4), lr/(lrm**3), lr/(lrm**2), lr/lrm, lr])
+        lrs = np.array([lr/(lrm**4), lr/(lrm**3), lr/(lrm**2), lr/lrm] + [lr] * (nl-2))
     else:
         lrs = lr
-    wd = 1e-6
+    #wd = 1e-6
     if not from_scratch:
         learn.load_encoder(lm_file)
     else:
@@ -106,7 +171,7 @@ def train_clas(dir_path, cuda_id, lm_id='', clas_id=None, bs=64, cl=1, backwards
         learn.load(intermediate_clas_file)
 
     if chain_thaw:
-        lrs = np.array([0.0001, 0.0001, 0.0001, 0.0001, 0.001])
+        lrs = np.array([0.0001, 0.0001, 0.0001, 0.0001] + [0.001] * (nl-2))
         print('Using chain-thaw. Unfreezing all layers one at a time...')
         n_layers = len(learn.get_layer_groups())
         print('# of layers:', n_layers)
@@ -140,7 +205,7 @@ def train_clas(dir_path, cuda_id, lm_id='', clas_id=None, bs=64, cl=1, backwards
         cl = None
     else:
         n_cycles = 1
-    learn.fit(lrs, n_cycles, wds=wd, cycle_len=cl, use_clr=(8,8) if use_clr else None)
+    learn.fit(lrs, n_cycles, wds=wd, cycle_len=cl, use_clr=(8,8) if use_clr else None, best_save_name=best_clas_file)
     print('Plotting lrs...')
     learn.sched.plot_lr()
     learn.save(final_clas_file)
