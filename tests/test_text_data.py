@@ -19,18 +19,35 @@ def text_csv_file(filepath, labels):
     file.close()
     return file
 
+def text_files(path, labels):
+    os.makedirs(path/'temp', exist_ok=True)
+    texts = ["fast ai is a cool project", "hello world"] * 20
+    for lbl in labels:
+        os.makedirs(path/'temp'/lbl, exist_ok=True)
+        for i,t in enumerate(texts):
+            with open(path/'temp'/lbl/f'{lbl}_{i}.txt', 'w') as f: f.write(t)
+
+def test_from_folder():
+    path = untar_data(URLs.IMDB_SAMPLE)
+    text_files(path, ['pos', 'neg'])
+    data = (TextList.from_folder(path/'temp')                           
+               .random_split_by_pct(0.1)
+               .label_from_folder()           
+               .databunch())
+    assert (len(data.train_ds) + len(data.valid_ds)) == 80
+    assert set(data.classes) == {'neg', 'pos'}
+    shutil.rmtree(path/'temp')
+
 def test_from_csv_and_from_df():
     path = untar_data(URLs.IMDB_SAMPLE)
     df = text_df(['neg','pos'])
     data1 = TextClasDataBunch.from_df(path, train_df=df, valid_df=df, test_df=df, label_cols=0, text_cols=["text"])
     assert len(data1.classes) == 2
-    df_test_collate(data1)
     df = text_df(['neg','pos','neg pos'])
-    data2 = TextClasDataBunch.from_df(path, train_df=df, valid_df=df, test_df=df, 
+    data2 = TextClasDataBunch.from_df(path, train_df=df, valid_df=df, test_df=df,
                                   label_cols=0, text_cols=["text"], label_delim=' ')
     assert len(data2.classes) == 2
     x,y = data2.train_ds[0]
-    assert isinstance(y.data, np.ndarray)
     assert len(y.data) == 2
     text_csv_file(path/'tmp.csv', ['neg','pos'])
     data3 = TextLMDataBunch.from_csv(path, 'tmp.csv', test='tmp.csv', label_cols=0, text_cols=["text"])
@@ -40,7 +57,7 @@ def test_from_csv_and_from_df():
 def test_should_load_backwards_lm():
     path = untar_data(URLs.IMDB_SAMPLE)
     df = text_df(['neg','pos'])
-    data = TextLMDataBunch.from_df(path, train_df=df, valid_df=df, label_cols=0, text_cols=["text"], 
+    data = TextLMDataBunch.from_df(path, train_df=df, valid_df=df, label_cols=0, text_cols=["text"],
                                    bs=1, backwards=True)
     lml = data.train_dl.dl
     lml.data = lml.batchify(np.concatenate([lml.dataset.x.items[i] for i in range(len(lml.dataset))]))
@@ -52,3 +69,16 @@ def df_test_collate(data):
     x,y = next(iter(data.train_dl))
     assert x.size(0) == 8
     assert x[0,-1] == 1
+    
+def test_load_and_save_test():
+    path = untar_data(URLs.IMDB_SAMPLE)
+    df = text_df(['neg','pos'])
+    data = TextClasDataBunch.from_df(path, train_df=df, valid_df=df, test_df=df, label_cols=0, text_cols="text")
+    data.save()
+    data1 = TextClasDataBunch.load(path)
+    assert np.all(data.classes == data1.classes)
+    assert np.all(data.train_ds.y.items == data1.train_ds.y.items)
+    str1 = np.array([str(o) for o in data.train_ds.y])
+    str2 = np.array([str(o) for o in data1.train_ds.y])
+    assert np.all(str1 == str2)
+    shutil.rmtree(path/'tmp')
