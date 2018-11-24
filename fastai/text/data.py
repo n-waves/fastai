@@ -40,6 +40,13 @@ class LanguageModelLoader():
     def __len__(self) -> int: return (self.n-1) // self.bptt
     def __getattr__(self,k:str)->Any: return getattr(self.dataset, k)
 
+    @property
+    def batch_size(self):
+        return self.bs
+    @batch_size.setter
+    def batch_size(self, v):
+        self.bs = v
+
     def batchify(self, data:np.ndarray) -> LongTensor:
         "Split the corpus `data` in batches."
         nb = data.shape[0] // self.bs
@@ -77,7 +84,7 @@ class SortishSampler(Sampler):
         ck_idx = [sort_idx[i:i+sz] for i in range(0, len(sort_idx), sz)]
         max_ck = np.argmax([self.key(ck[0]) for ck in ck_idx])  # find the chunk with the largest key,
         ck_idx[0],ck_idx[max_ck] = ck_idx[max_ck],ck_idx[0]     # then make sure it goes first.
-        sort_idx = np.concatenate(np.random.permutation(ck_idx[1:]))
+        sort_idx = np.concatenate(np.random.permutation(ck_idx[1:])) if len(ck_idx) > 1 else np.array([],dtype=np.int)
         sort_idx = np.concatenate((ck_idx[0], sort_idx))
         return iter(sort_idx)
 
@@ -92,7 +99,7 @@ def pad_collate(samples:BatchSamples, pad_idx:int=1, pad_first:bool=True) -> Tup
     return res, tensor([s[1] for s in samples])
 
 def _get_processor(tokenizer:Tokenizer=None, vocab:Vocab=None, chunksize:int=10000, max_vocab:int=60000,
-                   min_freq:int=2, mark_fields:bool=True, **kwargs):
+                   min_freq:int=2, mark_fields:bool=True):
     return [TokenizeProcessor(tokenizer=tokenizer, chunksize=chunksize, mark_fields=mark_fields),
             NumericalizeProcessor(vocab=vocab, max_vocab=max_vocab, min_freq=min_freq)]
 
@@ -142,7 +149,8 @@ class TextDataBunch(DataBunch):
                  val_tok:Collection[Collection[str]], val_lbls:Collection[Union[int,float]], vocab:Vocab=None,
                  tst_tok:Collection[Collection[str]]=None, classes:Collection[Any]=None, **kwargs) -> DataBunch:
         "Create a `TextDataBunch` from tokens and labels."
-        processor = _get_processor(tokenizer=None, vocab=vocab, **kwargs)[1]
+        p_kwargs, kwargs = split_kwargs_by_func(kwargs, _get_processor)
+        processor = _get_processor(tokenizer=None, vocab=vocab, **p_kwargs)[1]
         src = ItemLists(path, TextList(trn_tok, path=path, processor=processor),
                         TextList(val_tok, path=path, processor=processor))
         src = src.label_for_lm() if cls==TextLMDataBunch else src.label_from_lists(trn_lbls, val_lbls)
@@ -154,7 +162,8 @@ class TextDataBunch(DataBunch):
                 tokenizer:Tokenizer=None, vocab:Vocab=None, classes:Collection[str]=None, text_cols:IntsOrStrs=1,
                 label_cols:IntsOrStrs=0, label_delim:str=None, **kwargs) -> DataBunch:
         "Create a `TextDataBunch` from DataFrames."
-        processor = _get_processor(tokenizer=tokenizer, vocab=vocab, **kwargs)
+        p_kwargs, kwargs = split_kwargs_by_func(kwargs, _get_processor)
+        processor = _get_processor(tokenizer=None, vocab=vocab, **p_kwargs)
         src = ItemLists(path, TextList.from_df(train_df, path, cols=text_cols, processor=processor),
                         TextList.from_df(valid_df, path, cols=text_cols, processor=processor))
         src = src.label_for_lm() if cls==TextLMDataBunch else src.label_from_df(cols=label_cols, classes=classes, sep=label_delim)
@@ -179,7 +188,8 @@ class TextDataBunch(DataBunch):
                     classes:Collection[Any]=None, tokenizer:Tokenizer=None, vocab:Vocab=None, **kwargs):
         "Create a `TextDataBunch` from text files in folders."
         path = Path(path).absolute()
-        processor = [OpenFileProcessor()] + _get_processor(tokenizer=tokenizer, vocab=vocab, **kwargs)
+        p_kwargs, kwargs = split_kwargs_by_func(kwargs, _get_processor)
+        processor = [OpenFileProcessor()] + _get_processor(tokenizer=None, vocab=vocab, **p_kwargs)
         src = (TextList.from_folder(path, processor=processor)
                        .split_by_folder(train=train, valid=valid))
         src = src.label_for_lm() if cls==TextLMDataBunch else src.label_from_folder(classes=classes)
