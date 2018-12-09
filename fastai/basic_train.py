@@ -9,8 +9,10 @@ __all__ = ['Learner', 'LearnerCallback', 'Recorder', 'RecordOnCPU', 'fit', 'loss
 defaults.lr = slice(3e-3)
 defaults.wd = 1e-2
 
+
+
 def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None, opt:OptOptimizer=None,
-               cb_handler:Optional[CallbackHandler]=None)->Tuple[Union[Tensor,int,float,str]]:
+               cb_handler:Optional[CallbackHandler]=None, to_cpu=True)->Tuple[Union[Tensor,int,float,str]]:
     "Calculate loss and metrics for a batch, call out to callbacks as necessary."
     cb_handler = ifnone(cb_handler, CallbackHandler())
     if not is_listy(xb): xb = [xb]
@@ -28,8 +30,9 @@ def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None
         opt.step()
         cb_handler.on_step_end()
         opt.zero_grad()
-
-    return loss.detach().cpu()
+    if to_cpu:
+        return loss.detach().cpu()
+    return loss.detach()
 
 def get_preds(model:nn.Module, dl:DataLoader, pbar:Optional[PBar]=None, cb_handler:Optional[CallbackHandler]=None,
               activ:nn.Module=None, loss_func:OptLossFunc=None, n_batch:Optional[int]=None) -> List[Tensor]:
@@ -78,11 +81,14 @@ def fit(epochs:int, model:nn.Module, loss_func:LossFunction, opt:optim.Optimizer
         for epoch in pbar:
             model.train()
             cb_handler.on_epoch_begin()
-
+            loss = None
             for xb,yb in progress_bar(data.train_dl, parent=pbar):
+                if loss is not None: # make sure we can prepare the data in parallel to the execution of model on GPU
+                    loss = loss.cpu()
+                    if cb_handler.on_batch_end(loss): break
                 xb, yb = cb_handler.on_batch_begin(xb, yb)
-                loss = loss_batch(model, xb, yb, loss_func, opt, cb_handler)
-                if cb_handler.on_batch_end(loss): break
+                loss = loss_batch(model, xb, yb, loss_func, opt, cb_handler, to_cpu=False)
+
 
             if hasattr(data,'valid_dl') and data.valid_dl is not None and data.valid_ds is not None:
                 val_loss = validate(model, data.valid_dl, loss_func=loss_func,
