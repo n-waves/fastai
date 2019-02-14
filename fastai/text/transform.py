@@ -1,6 +1,9 @@
 "NLP data processing; tokenizes text and creates vocab indexes"
 from ..torch_core import *
 
+import spacy
+from spacy.symbols import ORTH
+
 __all__ = ['BaseTokenizer', 'SpacyTokenizer', 'Tokenizer', 'Vocab', 'fix_html', 'replace_all_caps', 'replace_rep', 'replace_wrep',
            'rm_useless_spaces', 'spec_add_spaces', 'BOS', 'FLD', 'UNK', 'PAD', 'TK_MAJ', 'TK_UP', 'TK_REP', 'TK_REP', 'TK_WREP',
            'deal_caps']
@@ -108,7 +111,7 @@ class Tokenizer():
         "Process a list of `texts` in one process."
         tok = self.tok_func(self.lang)
         if self.special_cases: tok.add_special_cases(self.special_cases)
-        return [self.process_text(t, tok) for t in texts]
+        return [self.process_text(str(t), tok) for t in texts]
 
     def process_all(self, texts:Collection[str]) -> List[List[str]]:
         "Process a list of `texts`."
@@ -117,7 +120,7 @@ class Tokenizer():
             return sum(e.map(self._process_all_1, partition_by_cores(texts, self.n_cpus)), [])
 
 class Vocab():
-    "Contain the correspondance between numbers and tokens and numericalize."
+    "Contain the correspondence between numbers and tokens and numericalize."
     def __init__(self, itos:Collection[str]):
         self.itos = itos
         self.stoi = collections.defaultdict(int,{v:k for k,v in enumerate(self.itos)})
@@ -128,7 +131,7 @@ class Vocab():
 
     def textify(self, nums:Collection[int], sep=' ') -> List[str]:
         "Convert a list of `nums` to their tokens."
-        return sep.join([self.itos[i] for i in nums])
+        return sep.join([self.itos[i] for i in nums]) if sep is not None else [self.itos[i] for i in nums]
 
     def __getstate__(self):
         return {'itos':self.itos}
@@ -141,9 +144,8 @@ class Vocab():
     def create(cls, tokens:Tokens, max_vocab:int, min_freq:int) -> 'Vocab':
         "Create a vocabulary from a set of `tokens`."
         freq = Counter(p for o in tokens for p in o)
-        itos = [o for o,c in freq.most_common(max_vocab) if c > min_freq]
+        itos = [o for o,c in freq.most_common(max_vocab) if c >= min_freq]
         for o in reversed(defaults.text_spec_tok):
             if o in itos: itos.remove(o)
             itos.insert(0, o)
         return cls(itos)
-

@@ -361,6 +361,146 @@ More details, example and ways are [here](https://docs.pytest.org/en/latest/skip
 
 
 
+#### Custom markers
+
+
+Normally, you should be able to declare a test as:
+
+```
+import pytest
+@pytest.mark.mymarker
+def test_mytest(): ...
+```
+
+You can then restrict a test run to only run tests marked with `mymarker`:
+
+```
+pytest -v -m mymarker
+```
+
+Running all tests except the `mymarker` ones:
+
+```
+$ pytest -v -m "not mymarker"
+```
+
+Custom markers should be registered in `setup.cfg`, for example:
+
+```
+[tool:pytest]
+# force all used markers to be registered here with an explanation
+addopts = --strict
+markers =
+    marker1: description of its purpose
+    marker2: description of its purpose
+```
+
+#### fastai custom markers
+
+These are defined in `tests/conftest.py`.
+
+The following markers override normal marker functionality, so they won't work with:
+
+```
+pytest -m marker
+```
+
+and have their own command line option to be used instead, which are defined in `tests/conftest.py`, and can also be seen in the output of `pytest -h` in the "custom options" section:
+
+```
+custom options:
+  --runslow             run slow tests
+  --skipint             skip integration tests
+```
+
+* `slow` - skip tests that can be quite slow (especially on CPU):
+
+   ```
+   @pytest.mark.slow
+   def test_some_slow_test(): ...
+   ```
+
+   To force this kind of tests to run, use:
+   ```
+   pytest --runslow
+   ```
+
+* `integration` - used for tests that are relatively slow but OK to be run on CPU and useful when one needs to finish the tests suite asap (also remember to use parallel testing if that's the case [xdist](#running-tests-in-parallel)). These are usually declared on the module level with:
+
+   ```
+   pytestmark = pytest.mark.integration
+   ```
+
+   And to skip those use:
+   ```
+   pytest --skipint
+   ```
+
+* `cuda` - mark tests as requiring a CUDA device to run (skipped if no such device is present). These tests check CUDA-specific code, e.g., compiling and running kernels or GPU version of function's `forward`/`backward` methods.
+
+
+### After test cleanup
+
+To ensure some cleanup code is always run at the end of the test module, add to the desired test module the following code:
+
+```
+@pytest.fixture(scope="module", autouse=True)
+def cleanup(request):
+    """Cleanup the tmp file once we are finished."""
+    def remove_tmp_file():
+        file = "foobar.tmp"
+        if os.path.exists(file): os.remove(file)
+    request.addfinalizer(remove_tmp_file)
+```
+
+The `autouse=True` tells `pytest` to run this fixture automatically (without being called anywhere else).
+
+Use `scope="session"` to run the teardown code not at the end of this test module, but after all test modules were run, i.e. just before `pytest` exits.
+
+Another way to accomplish the global teardown is to put in `tests/conftest.py`:
+
+```
+def pytest_sessionfinish(session, exitstatus):
+    # global tear down code goes here
+```
+
+To run something before and after each test, add to the test module:
+
+```
+@pytest.fixture(autouse=True)
+def run_around_tests():
+    # Code that will run before your test, for example:
+    some_setup()
+    # A test function will be run at this point
+    yield
+    # Code that will run after your test, for example:
+    some_teardown()
+```
+
+`autouse=True` makes this function run for each test defined in the same module automatically.
+
+For creation/teardown of temporary resources for the scope of a test, do the same as above, except get `yield` to return that resource.
+
+```
+@pytest.fixture(scope="module")
+def learner_obj():
+    # Code that will run before your test, for example:
+    learn = Learner(...)
+    # A test function will be run at this point
+    yield learn
+    # Code that will run after your test, for example:
+    del learn
+```
+
+You can now use that function as an argument to a test function:
+
+```
+def test_foo(learner_obj):
+    learner_obj.fit(...)
+```
+
+
+
 
 ### Testing the stdout/stderr output
 
@@ -382,6 +522,149 @@ def test_result_and_stdout(capsys):
     assert msg in out
     assert msg in err
 ```
+
+And, of course, most of the time, stderr will come as a part of an exception, so try/except has to be used in such a case:
+
+```
+def raise_exception(msg): raise ValueError(msg)
+def test_something_exception():
+    msg = "Not a good value"
+    error = ''
+    try: raise_exception(msg)
+    except Exception as e:
+        error = str(e)
+        assert msg in error, f"{msg} is in the exception:\n{error}"
+```
+
+Another approach to capturing stdout, is via `contextlib.redirect_stdout`:
+
+```
+from io import StringIO
+from contextlib import redirect_stdout
+def print_to_stdout(s): print(s)
+def test_result_and_stdout():
+    msg = "Hello"
+    buffer = StringIO()
+    with redirect_stdout(buffer): print_to_stdout(msg)
+    out = buffer.getvalue()
+    # optional: if you want to replay the consumed streams:
+    sys.stdout.write(out)
+    # test:
+    assert msg in out
+```
+
+An important potential issue with capturing stdout is that it may contain `\r` characters that in normal `print` reset everything that has been printed so far. There is no problem with `pytest`, but with `pytest -s` these characters get included in the buffer, so to be able to have the test run w/ and w/o `-s`, you have to make an extra cleanup to the captured output, using `re.sub(r'^.*\r', '', buf, 0, re.M)`. You can use a test helper function for that:
+
+```
+from utils.text import *
+output = apply_print_resets(output)
+```
+
+But, then we have a helper context manager wrapper to automatically take care of it all, regardless of whether it has some `\r`s in it or not, so it's a simple:
+```
+from utils.text import *
+with CaptureStdout() as cs: function_that_writes_to_stdout()
+print(cs.out)
+```
+Here is a full test example:
+```
+from utils.text import *
+msg = "Secret message\r"
+final = "Hello World"
+with CaptureStdout() as cs: print(msg + final)
+assert cs.out == final+"\n", f"captured: {cs.out}, expecting {final}"
+```
+
+If you'd like to capture `stderr` use the `CaptureStderr` class instead:
+
+```
+from utils.text import *
+with CaptureStderr() as cs: function_that_writes_to_stderr()
+print(cs.err)
+```
+
+If you need to capture both streams at once, use the parent `CaptureStd` class:
+
+```
+from utils.text import *
+with CaptureStd() as cs: function_that_writes_to_stdout_and_stderr()
+print(cs.err, cs.out)
+```
+
+
+
+### Testing memory leaks
+
+This section is currently focused on GPU RAM since it's the scarce resource, but we should test general RAM too.
+
+#### Utils
+
+* Memory measuring helper utils are found in `tests/utils/mem.py`:
+
+   ```
+   from utils.mem import *
+   ```
+
+* Test whether we can use GPU:
+   ```
+   use_gpu = torch.cuda.is_available()
+   ```
+   `torch.cuda.is_available()` checks if we can use NVIDIA GPU. It automatically handles the case when CUDA_VISIBLE_DEVICES="" env var is set, so even if CUDA is available it will return False, thus we can emulate non-CUDA environment.
+
+* Force `pytorch` to preload cuDNN and its kernels to claim unreclaimable memory (~0.5GB) if it hasn't done so already, so that we get correct measurements. This must run before any tests that measure GPU RAM. If you don't run it you will get erratic behavior and wrong measurements.
+   ```
+   torch_preload_mem()
+   ```
+
+* Consume some GPU RAM:
+   ```
+   gpu_mem_consume_some(n)
+   ```
+   `n` is the size of the matrix of `torch.ones`. When `n=2**14` it consumes about 1GB, but that's too much for the test suite, so use small numbers, e.g.: `n=2000` consumes about 16MB.
+
+
+* alias for `torch.cuda.empty_cache()`
+   ```
+   gpu_cache_clear()
+   ```
+   It's absolutely essential to run this one, if you're trying to measure real used memory. If cache doesn't get cleared the reported used/free memory can be quite inconsistent.
+
+
+* This is a combination of `gc.collect()` and `torch.cuda.empty_cache()`
+   ```
+   gpu_mem_reclaim()
+   ```
+   Again, this one is crucial for measuring the memory usage correctly. While normal objects get destroyed and their memory becomes available/cached right away, objects with circular references only get freed up when python invokes `gc.collect`, which happens periodically. So if you want to make sure your test doesn't get caught in the inconsistency of getting `gc.collect` to be called during that test or not, call it yourself. But, remember, that if you have to call `gc.collect()` there could be a problem that you will be masking by calling it. So before using it understand what it is doing.
+
+   After `gc.collect()` is called this functions clears the cache that potentially grew due to the released by `gc` objects, and we want to make sure we get the real used/free memory at all times.
+
+* This is a wrapper for getting the used memory for the currently selected device.
+   ```
+   gpu_mem_get_used()
+   ```
+
+#### Concepts
+
+* Taking into account cached memory and unpredictable `gc.collect` calls. See above.
+
+* Memory fluctuations. When measuring either general or GPU RAM there is often a small fluctuation in reported numbers, so when writing tests use functions that approximate equality, but do think deep about the margin you allow, so that the test is useful and yet it doesn't fail at random times.
+
+   Also remember that rounding happens when Bs are converted to MBs.
+
+   Here is an example:
+   ```
+   from math import isclose
+   used_before = gpu_mem_get_used()
+   ... some gpu consuming code here ...
+   used_after = gpu_mem_get_used()
+   assert isclose(used_before, used_after, abs_tol=6), "testing absolute tolerance"
+   assert isclose(used_before, used_after, rel_tol=0.02), "testing relative tolerance"
+   ```
+   This example compares used memory size (in MBs). The first assert compares whether the absolute difference between the two numbers is no more than 6.
+   The second assert does the same but uses a relative tolerance in percents -- `0.02` in the example means `2%`. So the accepted difference between the two numbers is no more than `2%`. Often absolute numbers provide a better test, because a percent-based approach could result in quite a large gap if the numbers are big.
+
+
+
 
 
 

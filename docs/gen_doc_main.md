@@ -124,7 +124,7 @@ Now, you can start working on the docstrings of the new or updated functions and
 Say you added a method to `data_block.py`:
 
 ```
-def def foobar(self, times:int=1)->'str':
+def foobar(self, times:int=1)->'str':
     "This functions returns FooBar * times"
     return "FooBar" * times
 ```
@@ -302,7 +302,7 @@ update_notebooks('fastai.gen_doc.gen_notebooks', dest_path='fastai/docs_src')
 
 ### Updating html only
 
-If you are not syncronizing the code base with its documentation, but made some manual changes to the documentation notebooks, then you don't need to update the notebooks, but just convert them to `.html`:
+If you are not synchronizing the code base with its documentation, but made some manual changes to the documentation notebooks, then you don't need to update the notebooks, but just convert them to `.html`:
 
 To convert `docs_src/*ipynb` to `docs/*html`:
 
@@ -362,7 +362,7 @@ If you work on markdown (.md) files it helps to be able to validate your changes
 ```
 grip -b docs/dev/release.md
 ```
-will open a browser with the rendered markdown as html - it uses github API, so this is exacly how it'll look on github once you commit it. And here is a handy alias:
+will open a browser with the rendered markdown as html - it uses github API, so this is exactly how it'll look on github once you commit it. And here is a handy alias:
 
 ```
 alias grip='grip -b'
@@ -393,3 +393,14 @@ bundle exec jekyll serve
 ```
 
 it will tell you which localhost url to go to to see the site.
+
+
+## Cleanups
+
+Check whether we have any `doc/*html` orphans that no longer have `docs_src/*ipynb` source files:
+
+```
+perl -le 'm#docs/(.*?)\.html# && !-e "docs_src/$1.ipynb" && print for @ARGV' docs/*html
+```
+
+and remove them from git.

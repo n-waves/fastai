@@ -53,6 +53,11 @@ def test_tuple():
     assert is_tuple([1])         == False
     assert is_tuple(1)           == False
 
+def test_dict():
+    assert is_dict({1:2,3:4})  == True
+    assert is_dict([1,2,3])    == False
+    assert is_dict((1,2,3))    == False
+
 def test_noop():
     assert noop(1) is 1
 
@@ -178,4 +183,15 @@ def test_df_names_to_idx():
 
 def test_one_hot():
     assert all(one_hot([0,-1], 5) == np.array([1,0,0,0,1]))
+
+def test_subplots_multi_row_cols():
+    axs = subplots(4, 4, figsize=(10, 10))
+    assert len(axs) == 4
+    assert (len(axs[0]) == 4)
+    assert (len(axs.flatten()) == 16)
+
+def test_subplots_single():
+    axs = subplots(1,1, figsize=(10, 10))
+    assert (len(axs) == 1)
+    assert (len(axs[0]) == 1)
 
