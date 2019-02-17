@@ -146,18 +146,6 @@ def _get_processor(tokenizer:Tokenizer=None, vocab:Vocab=None, chunksize:int=100
 class TextDataBunch(DataBunch):
     "General class to get a `DataBunch` for NLP. Subclassed by `TextLMDataBunch` and `TextClasDataBunch`."
 
-    def save(self, cache_name:PathOrStr='tmp'):
-        "Save the `DataBunch` in `self.path/cache_name` folder."
-        os.makedirs(self.path/cache_name, exist_ok=True)
-        cache_path = self.path/cache_name
-        pickle.dump(self.train_ds.vocab.itos, open(cache_path/'itos.pkl','wb'))
-        np.save(cache_path/f'train_ids.npy', self.train_ds.x.items)
-        np.save(cache_path/f'train_lbl.npy', self.train_ds.y.items)
-        np.save(cache_path/f'valid_ids.npy', self.valid_ds.x.items)
-        np.save(cache_path/f'valid_lbl.npy', self.valid_ds.y.items)
-        if self.test_dl is not None: np.save(cache_path/f'test_ids.npy', self.test_ds.x.items)
-        if hasattr(self.train_ds, 'classes'): save_texts(cache_path/'classes.txt', self.train_ds.classes)
-
     @classmethod
     def from_ids(cls, path:PathOrStr, vocab:Vocab, train_ids:Collection[Collection[int]], valid_ids:Collection[Collection[int]],
                  test_ids:Collection[Collection[int]]=None, train_lbls:Collection[Union[int,float]]=None,
@@ -175,6 +163,8 @@ class TextDataBunch(DataBunch):
     @classmethod
     def load(cls, path:PathOrStr, cache_name:PathOrStr='tmp', processor:PreProcessor=None, **kwargs):
         "Load a `TextDataBunch` from `path/cache_name`. `kwargs` are passed to the dataloader creation."
+        warn("""This method is deprecated and only kept to load data serialized in v1.0.43 or earlier. 
+                Use `load_data` for data saved with v1.0.44 or later.""", DeprecationWarning) 
         cache_path = Path(path)/cache_name
         vocab = Vocab(pickle.load(open(cache_path/'itos.pkl','rb')))
         train_ids,train_lbls = np.load(cache_path/f'train_ids.npy'), np.load(cache_path/f'train_lbl.npy')
@@ -214,18 +204,18 @@ class TextDataBunch(DataBunch):
 
     @classmethod
     def from_csv(cls, path:PathOrStr, csv_name, valid_pct:float=0.2, test:Optional[str]=None,
-                 tokenizer:Tokenizer=None, vocab:Vocab=None, classes:Collection[str]=None, header = 'infer', text_cols:IntsOrStrs=1,
-                 label_cols:IntsOrStrs=0, label_delim:str=None, chunksize:int=10000, max_vocab:int=60000,
-                min_freq:int=2, mark_fields:bool=False, **kwargs) -> DataBunch:
+                 tokenizer:Tokenizer=None, vocab:Vocab=None, classes:Collection[str]=None, delimiter:str=None, header='infer',
+                 text_cols:IntsOrStrs=1, label_cols:IntsOrStrs=0, label_delim:str=None,
+                 chunksize:int=10000, max_vocab:int=60000, min_freq:int=2, mark_fields:bool=False, **kwargs) -> DataBunch:
         "Create a `TextDataBunch` from texts in csv files. `kwargs` are passed to the dataloader creation."
-        df = pd.read_csv(Path(path)/csv_name, header=header)
+        df = pd.read_csv(Path(path)/csv_name, header=header, delimiter=delimiter)
         df = df.iloc[np.random.permutation(len(df))]
         cut = int(valid_pct * len(df)) + 1
         train_df, valid_df = df[cut:], df[:cut]
-        test_df = None if test is None else pd.read_csv(Path(path)/test, header=header)
+        test_df = None if test is None else pd.read_csv(Path(path)/test, header=header, delimiter=delimiter)
         return cls.from_df(path, train_df, valid_df, test_df, tokenizer=tokenizer, vocab=vocab, classes=classes, text_cols=text_cols,
                            label_cols=label_cols, label_delim=label_delim, chunksize=chunksize, max_vocab=max_vocab,
-                          min_freq=min_freq, mark_fields=mark_fields, **kwargs)
+                           min_freq=min_freq, mark_fields=mark_fields, **kwargs)
 
     @classmethod
     def from_folder(cls, path:PathOrStr, train:str='train', valid:str='valid', test:Optional[str]=None,
@@ -288,7 +278,9 @@ class TokenizeProcessor(PreProcessor):
     def __init__(self, ds:ItemList=None, tokenizer:Tokenizer=None, chunksize:int=10000, mark_fields:bool=False):
         self.tokenizer,self.chunksize,self.mark_fields = ifnone(tokenizer, Tokenizer()),chunksize,mark_fields
 
-    def process_one(self, item):  return self.tokenizer._process_all_1([item])[0]
+    def process_one(self, item):  
+        return self.tokenizer._process_all_1(_join_texts([item], self.mark_fields))[0]
+    
     def process(self, ds):
         ds.items = _join_texts(ds.items, self.mark_fields)
         tokens = []
@@ -347,20 +339,27 @@ class TextList(ItemList):
     def show_xys(self, xs, ys, max_len:int=70)->None:
         "Show the `xs` (inputs) and `ys` (targets). `max_len` is the maximum number of tokens displayed."
         from IPython.display import display, HTML
-        items = [['idx','text']] if self._is_lm else [['text','target']]
+        names = ['idx','text'] if self._is_lm else ['text','target']
+        items = []
         for i, (x,y) in enumerate(zip(xs,ys)):
             txt_x = ' '.join(x.text.split(' ')[:max_len]) if max_len is not None else x.text
-            items.append([str(i), str(txt_x)] if self._is_lm else [str(txt_x), str(y)])
-        display(HTML(text2html_table(items, ([5,95] if self._is_lm else [90,10]))))
+            items.append([i, txt_x] if self._is_lm else [txt_x, y])
+        items = np.array(items)
+        df = pd.DataFrame({n:items[:,i] for i,n in enumerate(names)}, columns=names)
+        with pd.option_context('display.max_colwidth', -1):
+            display(HTML(df.to_html(index=False)))
 
     def show_xyzs(self, xs, ys, zs, max_len:int=70):
         "Show `xs` (inputs), `ys` (targets) and `zs` (predictions). `max_len` is the maximum number of tokens displayed."
         from IPython.display import display, HTML
-        items = [['text','target','prediction']]
+        items,names = [],['text','target','prediction']
         for i, (x,y,z) in enumerate(zip(xs,ys,zs)):
             txt_x = ' '.join(x.text.split(' ')[:max_len]) if max_len is not None else x.text
-            items.append([str(txt_x), str(y), str(z)])
-        display(HTML(text2html_table(items,  [85,7.5,7.5])))
+            items.append([txt_x, y, z])
+        items = np.array(items)
+        df = pd.DataFrame({n:items[:,i] for i,n in enumerate(names)}, columns=names)
+        with pd.option_context('display.max_colwidth', -1):
+            display(HTML(df.to_html(index=False)))
 
 class LMLabelList(EmptyLabelList):
     "Basic `ItemList` for dummy labels."

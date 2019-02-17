@@ -28,23 +28,22 @@ def lr_find(learn:Learner, start_lr:Floats=1e-7, end_lr:Floats=10, num_it:int=10
     end_lr = learn.lr_range(end_lr)
     end_lr = np.array(end_lr) if is_listy(end_lr) else end_lr
     cb = LRFinder(learn, start_lr, end_lr, num_it, stop_div)
-    a = int(np.ceil(num_it/len(learn.data.train_dl)))
-    learn.fit(a, start_lr, callbacks=[cb], wd=wd)
+    epochs = int(np.ceil(num_it/len(learn.data.train_dl)))
+    learn.fit(epochs, start_lr, callbacks=[cb], wd=wd)
 
-def to_fp16(learn:Learner, loss_scale:float=512., flat_master:bool=False)->Learner:
+def to_fp16(learn:Learner, loss_scale:float=None, max_noskip:int=1000, dynamic:bool=False, clip:float=None,
+            flat_master:bool=False)->Learner:
     "Put `learn` in FP16 precision mode."
     learn.model = model2half(learn.model)
-    learn.mp_cb = MixedPrecision(learn, loss_scale=loss_scale, flat_master=flat_master)
+    learn.data.add_tfm(batch_to_half)
+    learn.mp_cb = MixedPrecision(learn, loss_scale=loss_scale, max_noskip=max_noskip, dynamic=dynamic, clip=clip, 
+                                 flat_master=flat_master)
     learn.callbacks.append(learn.mp_cb)
     return learn
 
 def to_fp32(learn:Learner):
     "Put `learn` back to FP32 precision mode."
-    learn.data.train_dl.remove_tfm(batch_to_half)
-    if hasattr(learn.data, 'valid_dl') and learn.data.valid_dl is not None:
-        learn.data.valid_dl.remove_tfm(batch_to_half)
-    if hasattr(learn.data, 'test_dl') and learn.data.test_dl is not None:
-        learn.data.test_dl.remove_tfm(batch_to_half)
+    learn.data.remove_tfm(batch_to_half)
     for cb in learn.callbacks: 
         if isinstance(cb, MixedPrecision): learn.callbacks.remove(cb)
     learn.model = learn.model.float()
@@ -100,15 +99,16 @@ Learner.clip_grad = clip_grad
 
 class ClassificationInterpretation():
     "Interpretation methods for classification models."
-    def __init__(self, data:DataBunch, probs:Tensor, y_true:Tensor, losses:Tensor, ds_type:DatasetType=DatasetType.Valid):
-        self.data,self.probs,self.y_true,self.losses,self.ds_type = data,probs,y_true,losses,ds_type
+    def __init__(self, learn:Learner, probs:Tensor, y_true:Tensor, losses:Tensor, ds_type:DatasetType=DatasetType.Valid):
+        self.data,self.probs,self.y_true,self.losses,self.ds_type, self.learn= learn.data,probs,y_true,losses,ds_type,learn
         self.pred_class = self.probs.argmax(dim=1)
+        
 
     @classmethod
-    def from_learner(cls, learn:Learner, ds_type:DatasetType=DatasetType.Valid):
+    def from_learner(cls, learn: Learner,  ds_type:DatasetType=DatasetType.Valid):
         "Create an instance of `ClassificationInterpretation`"
         preds = learn.get_preds(ds_type=ds_type, with_loss=True)
-        return cls(learn.data, *preds)
+        return cls(learn, *preds)
 
     def confusion_matrix(self, slice_size:int=1):
         "Confusion matrix as an `np.ndarray`."
@@ -123,7 +123,7 @@ class ClassificationInterpretation():
         return to_np(cm)
 
     def plot_confusion_matrix(self, normalize:bool=False, title:str='Confusion matrix', cmap:Any="Blues", slice_size:int=1, 
-                              norm_dec:int=2, **kwargs)->None:
+                              norm_dec:int=2, plot_txt:bool=True, **kwargs)->None:
         "Plot the confusion matrix, with `title` and using `cmap`."
         # This function is mainly copied from the sklearn docs
         cm = self.confusion_matrix(slice_size=slice_size)
@@ -135,10 +135,11 @@ class ClassificationInterpretation():
         plt.xticks(tick_marks, self.data.y.classes, rotation=90)
         plt.yticks(tick_marks, self.data.y.classes, rotation=0)
 
-        thresh = cm.max() / 2.
-        for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
-            coeff = f'{cm[i, j]:.{norm_dec}f}' if normalize else f'{cm[i, j]}'
-            plt.text(j, i, coeff, horizontalalignment="center", color="white" if cm[i, j] > thresh else "black")
+        if plot_txt:
+            thresh = cm.max() / 2.
+            for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+                coeff = f'{cm[i, j]:.{norm_dec}f}' if normalize else f'{cm[i, j]}'
+                plt.text(j, i, coeff, horizontalalignment="center", color="white" if cm[i, j] > thresh else "black")
 
         plt.tight_layout()
         plt.ylabel('Actual')
@@ -148,7 +149,7 @@ class ClassificationInterpretation():
         "Sorted descending list of largest non-diagonal entries of confusion matrix, presented as actual, predicted, number of occurrences."
         cm = self.confusion_matrix(slice_size=slice_size)
         np.fill_diagonal(cm, 0)
-        res = [(self.data.y.classes[i],self.data.y.classes[j],cm[i,j])
+        res = [(self.data.classes[i],self.data.classes[j],cm[i,j])
                 for i,j in zip(*np.where(cm>min_val))]
         return sorted(res, key=itemgetter(2), reverse=True)
     

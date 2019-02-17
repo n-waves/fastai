@@ -13,8 +13,9 @@ def _maybe_squeeze(arr): return (arr if is1d(arr) else np.squeeze(arr))
 
 def _get_files(parent, p, f, extensions):
     p = Path(p)#.relative_to(parent)
+    low_extensions = [e.lower() for e in extensions] if extensions is not None else None
     res = [p/o for o in f if not o.startswith('.')
-           and (extensions is None or f'.{o.split(".")[-1].lower()}' in extensions)]
+           and (extensions is None or f'.{o.split(".")[-1].lower()}' in low_extensions)]
     return res
 
 def get_files(path:PathOrStr, extensions:Collection[str]=None, recurse:bool=False,
@@ -120,10 +121,10 @@ class ItemList():
         return res
 
     @classmethod
-    def from_csv(cls, path:PathOrStr, csv_name:str, cols:IntsOrStrs=0, header:str='infer', 
+    def from_csv(cls, path:PathOrStr, csv_name:str, cols:IntsOrStrs=0, delimiter:str=None, header:str='infer', 
                  processor:PreProcessors=None, **kwargs)->'ItemList':
-        "Create an `ItemList` in `path` from the inputs in the `cols` of `path/csv_name` opened with `header`."
-        df = pd.read_csv(Path(path)/csv_name, header=header)
+        """Create an `ItemList` in `path` from the inputs in the `cols` of `path/csv_name`"""
+        df = pd.read_csv(Path(path)/csv_name, delimiter=delimiter, header=header)
         return cls.from_df(df, path=path, cols=cols, processor=processor, **kwargs)
 
     def _relative_item_path(self, i): return self.items[i].relative_to(self.path)
@@ -219,9 +220,9 @@ class ItemList():
     def get_label_cls(self, labels, label_cls:Callable=None, label_delim:str=None, **kwargs):
         "Return `label_cls` or guess one from the first element of `labels`."
         if label_cls is not None:               return label_cls
-        if self.label_cls is not None:          return self.label_cls
-        it = index_row(labels,0)
+        if self.label_cls is not None:          return self.label_cls 
         if label_delim is not None:             return MultiCategoryList
+        it = index_row(labels,0)
         if isinstance(it, (float, np.float32)): return FloatList
         if isinstance(try_int(it), (str, Integral)):  return CategoryList
         if isinstance(it, Collection):          return MultiCategoryList
@@ -289,7 +290,7 @@ class CategoryProcessor(PreProcessor):
 
     def generate_classes(self, items):
         "Generate classes from `items` by taking the sorted unique values."
-        return uniqueify(items)
+        return uniqueify(items, sort=True)
 
     def process_one(self,item):
         if isinstance(item, EmptyLabel): return item
@@ -401,8 +402,8 @@ class FloatList(ItemList):
 
 class ItemLists():
     "An `ItemList` for each of `train` and `valid` (optional `test`)."
-    def __init__(self, path:PathOrStr, train:ItemList, valid:ItemList, test:ItemList=None):
-        self.path,self.train,self.valid,self.test = Path(path),train,valid,test
+    def __init__(self, path:PathOrStr, train:ItemList, valid:ItemList):
+        self.path,self.train,self.valid,self.test = Path(path),train,valid,None
         if not self.train.ignore_empty and len(self.train.items) == 0:
             warn("Your training set is empty. Is this is by design, pass `ignore_empty=True` to remove this warning.")
         if not self.valid.ignore_empty and len(self.valid.items) == 0:
@@ -453,7 +454,8 @@ class ItemLists():
 
     def transform(self, tfms:Optional[Tuple[TfmList,TfmList]]=(None,None), **kwargs):
         "Set `tfms` to be applied to the xs of the train and validation set."
-        if not tfms: return self
+        if not tfms: tfms=(None,None)
+        assert is_listy(tfms) and len(tfms) == 2, "Please pass a list of two lists of transforms (train and valid)."
         self.train.transform(tfms[0], **kwargs)
         self.valid.transform(tfms[1], **kwargs)
         if self.test: self.test.transform(tfms[1], **kwargs)
@@ -495,6 +497,7 @@ class LabelLists(ItemLists):
         if getattr(self, 'normalize', False):#In case a normalization was serialized
             norm = self.normalize
             data.normalize((norm['mean'], norm['std']), do_x=norm['do_x'], do_y=norm['do_y'])
+        data.label_list = self
         return data
 
     def add_test(self, items:Iterator, label:Any=None):
