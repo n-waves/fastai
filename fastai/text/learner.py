@@ -63,7 +63,7 @@ class RNNLearner(Learner):
         "Load the encoder `name` from the model directory."
         encoder = get_model(self.model)[0]
         if hasattr(encoder, 'module'): encoder = encoder.module
-        encoder.load_state_dict(torch.load(self.path/self.model_dir/f'{name}.pth'))
+        encoder.load_state_dict(torch.load(self.path/self.model_dir/f'{name}.pth', map_location=lambda storage, loc: storage))
         self.freeze()
 
     def load_pretrained(self, wgts_fname:str, itos_fname:str, strict:bool=True):
