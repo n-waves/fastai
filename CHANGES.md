@@ -10,29 +10,31 @@ Note that the top-most release is changes in the unreleased master branch on
 Github. Parentheses after an item show the name or github id of the contributor
 of that change.
 
-
-
-
-
-
-
-
-
-
 ## 1.0.46.dev0 (Work In Progress)
+
+### Breaking change:
+
+- In `CollabDataBunch`, `pct_val` is renamed `valid_pct` for consistency
 
 ### New:
 
 - `Learner.destroy`: completely free up `learn`, leaving an empty shell (to replace `gc.collect` eye-sore)
-- `Learner.hibernate`: `learn.export` + `learn.destroy` shortcut method
-
+- added NVML query support on OSX via `pynvx` in addition to `pynvml`
+- Added `XResNet`, which is ResNet plus tricks from
+  [Bag of Tricks for Image Classification](https://arxiv.org/abs/1812.01187).
+  Note pretrained models note available yet for this architecture.
 
 ### Changed:
 
 - revamped `Learner.purge` to reclaim more RAM
+- clearer error messages when using the data block API in the wrong order
+- `ItemList.label_from_list` becomes private to avoid confusion
+- `recurse` parameter for `verify_images`
 
 ### Fixed:
 
+- various memory usage improvements
+- `verify_images` fixes channels even if no new size is passed
 
 
 ## 1.0.45 (2019-02-13)
@@ -54,7 +56,6 @@ wasn't released.
 - `extensions` are checked with a case-insensitive match.
 
 
-
 ## 1.0.43 (2019-02-11)
 
 ### Breaking change:
@@ -63,8 +64,9 @@ wasn't released.
 
 ### New:
 
-- More models supported by `create_cnn` (densenet121, densenet169, densenet201, densenet161, vgg16_bn, vgg19_bn, alexnet) thanks to PPPW
-- Backward option in `TextClassifierDataBunch` (thanks to tpietruszka)
+- More models supported by `create_cnn` (`densenet121`, `densenet169`,
+  `densenet201`, `densenet161`, `vgg16_bn`, `vgg19_bn`, `alexnet`) thanks to PPPW
+- Backward option in `text_classifier_learner` (thanks to tpietruszka)
 - Automate custom dependency groups installation via extending `distutils`
 - Transformer and TransformerXL architectures
 - Add `val_bs` parameter to all `DataBunch` creation methods

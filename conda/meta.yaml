@@ -83,6 +83,7 @@ test:
   requires:
     - python
     - pytest
+    - responses
 
 about:
   home: {{ data.get('url') }}

@@ -23,7 +23,7 @@ class OptimWrapper():
         opt = cls(opt, wd=wd, true_wd=true_wd, bn_wd=bn_wd)
         opt.lr,opt.opt_func = listify(lr, layer_groups),opt_func
         return opt
-    
+
     def new(self, layer_groups:Collection[nn.Module]):
         "Create a new `OptimWrapper` from `self` with another `layer_groups` but the same hyper-parameters."
         opt_func = getattr(self, 'opt_func', self.opt.__class__)
@@ -49,11 +49,11 @@ class OptimWrapper():
     def zero_grad(self)->None:
         "Clear optimizer gradients."
         self.opt.zero_grad()
-        
+
     #Passthrough to the inner opt.
     def __getattr__(self,k:str)->Any: return getattr(self.opt, k, None)
     def __setstate__(self,data:Any): self.__dict__.update(data)
-           
+
     def clear(self):
         "Reset the state of the inner optimizer."
         sd = self.state_dict()
@@ -132,7 +132,7 @@ class OptimWrapper():
 
 class Callback():
     "Base class for callbacks that want to record values, dynamically change learner params, etc."
-    _order=0 
+    _order=0
     def on_train_begin(self, **kwargs:Any)->None:
         "To initialize constants in the callback."
         pass
@@ -164,18 +164,18 @@ class Callback():
     def on_train_end(self, **kwargs:Any)->None:
         "Useful for cleaning up things and saving files/models."
         pass
-    
+
     def get_state(self, minimal:bool=True):
         "Return the inner state of the `Callback`, `minimal` or not."
         to_remove = ['exclude', 'not_min'] + getattr(self, 'exclude', []).copy()
         if minimal: to_remove += getattr(self, 'not_min', []).copy()
         return {k:v for k,v in self.__dict__.items() if k not in to_remove}
-    
-    def  __repr__(self): 
+
+    def  __repr__(self):
         attrs = func_args(self.__init__)
         to_remove = getattr(self, 'exclude', [])
         list_repr = [self.__class__.__name__] + [f'{k}: {getattr(self, k)}' for k in attrs if k != 'self' and k not in to_remove]
-        return '\n'.join(list_repr) 
+        return '\n'.join(list_repr)
 
 class SmoothenValue():
     "Create a smooth moving average for a value (loss, etc) using `beta`."
@@ -261,10 +261,11 @@ class CallbackHandler():
 
     def on_backward_end(self)->None:
         "Handle end of gradient calculation."
-        self('backward_end', False)
+        return np.any(self('backward_end', False))
+        
     def on_step_end(self)->None:
         "Handle end of optimization step."
-        self('step_end', False)
+        return np.any(self('step_end', False))
 
     def on_batch_end(self, loss:Tensor)->None:
         "Handle end of processing one batch with `loss`."

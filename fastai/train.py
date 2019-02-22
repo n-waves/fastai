@@ -4,21 +4,21 @@ from .callbacks import *
 from .basic_data import *
 from .basic_train import *
 
-__all__ = ['BnFreeze', 'GradientClipping', 'ShowGraph', 'ClassificationInterpretation', 'fit_one_cycle', 'lr_find', 'one_cycle_scheduler', 'to_fp16', 'to_fp32',
-           'mixup']
+__all__ = ['BnFreeze', 'GradientClipping', 'ShowGraph', 'ClassificationInterpretation', 'fit_one_cycle', 'lr_find', 
+           'one_cycle_scheduler', 'to_fp16', 'to_fp32', 'mixup', 'AccumulateStepper']
 
 def one_cycle_scheduler(lr_max:float, **kwargs:Any)->OneCycleScheduler:
     "Instantiate a `OneCycleScheduler` with `lr_max`."
     return partial(OneCycleScheduler, lr_max=lr_max, **kwargs)
 
 def fit_one_cycle(learn:Learner, cyc_len:int, max_lr:Union[Floats,slice]=defaults.lr,
-                  moms:Tuple[float,float]=(0.95,0.85), div_factor:float=25., pct_start:float=0.3,
+                  moms:Tuple[float,float]=(0.95,0.85), div_factor:float=25., pct_start:float=0.3, final_div:float=None,
                   wd:float=None, callbacks:Optional[CallbackList]=None, tot_epochs:int=None, start_epoch:int=1)->None:
     "Fit a model following the 1cycle policy."
     max_lr = learn.lr_range(max_lr)
     callbacks = listify(callbacks)
-    callbacks.append(OneCycleScheduler(learn, max_lr, moms=moms, div_factor=div_factor, pct_start=pct_start, tot_epochs=tot_epochs, 
-                                       start_epoch=start_epoch))
+    callbacks.append(OneCycleScheduler(learn, max_lr, moms=moms, div_factor=div_factor, pct_start=pct_start,
+                                       final_div=final_div, tot_epochs=tot_epochs, start_epoch=start_epoch))
     learn.fit(cyc_len, max_lr, wd=wd, callbacks=callbacks)
 
 def lr_find(learn:Learner, start_lr:Floats=1e-7, end_lr:Floats=10, num_it:int=100, stop_div:bool=True, wd:float=None):
@@ -94,8 +94,48 @@ def clip_grad(learn:Learner, clip:float=0.1)->Learner:
     "Add gradient clipping of `clip` during training."
     learn.callback_fns.append(partial(GradientClipping, clip=clip))
     return learn
-
 Learner.clip_grad = clip_grad
+     
+class AccumulateStepper(LearnerCallback):
+    "Does accumlated step every nth step by accumulating gradients"
+
+    def __init__(self, learn:Learner, n_step:int = 1, drop_last:bool = False):
+        super().__init__(learn)
+        self.n_step,self.drop_last = n_step,drop_last
+ 
+    def on_train_begin(self, **kwargs):
+        "check if loss is reduction"
+        if hasattr(self.loss_func, "reduction") and (self.loss_func.reduction != "sum"):
+             warn("For better gradients consider 'reduction=sum'")
+        
+    def on_epoch_begin(self, **kwargs):
+        "init samples and batches, change optimizer"
+        self.acc_samples, self.acc_batches = 0., 0. 
+        
+    def on_batch_begin(self, last_input, last_target, **kwargs):
+        "accumulate samples and batches"
+        self.acc_samples += last_input.shape[0]
+        self.acc_batches += 1
+        
+    def on_backward_end(self, **kwargs):
+        "accumulated step and reset samples, True will result in no stepping"
+        if (self.acc_batches % self.n_step) == 0:
+            for p in (self.learn.model.parameters()):
+                if p.requires_grad: p.grad.div_(self.acc_samples)
+            self.acc_samples = 0
+        else: return True
+    
+    def on_step_end(self, **kwargs):
+        "zero gradients after stepping, True will result in no zeroing"
+        return (self.acc_batches % self.n_step) != 0
+    
+    def on_epoch_end(self, **kwargs):
+        "step the rest of the accumulated grads if not perfectly divisible"
+        for p in (self.learn.model.parameters()):
+                if p.requires_grad: p.grad.div_(self.acc_samples)
+        if not self.drop_last: self.learn.opt.step()
+        self.learn.opt.zero_grad()
+
 
 class ClassificationInterpretation():
     "Interpretation methods for classification models."
@@ -144,13 +184,14 @@ class ClassificationInterpretation():
         plt.tight_layout()
         plt.ylabel('Actual')
         plt.xlabel('Predicted')
+        plt.grid(False)
 
-    def most_confused(self, min_val:int=0, slice_size:int=1)->Collection[Tuple[str,str,int]]:
+    def most_confused(self, min_val:int=1, slice_size:int=1)->Collection[Tuple[str,str,int]]:
         "Sorted descending list of largest non-diagonal entries of confusion matrix, presented as actual, predicted, number of occurrences."
         cm = self.confusion_matrix(slice_size=slice_size)
         np.fill_diagonal(cm, 0)
         res = [(self.data.classes[i],self.data.classes[j],cm[i,j])
-                for i,j in zip(*np.where(cm>min_val))]
+                for i,j in zip(*np.where(cm>=min_val))]
         return sorted(res, key=itemgetter(2), reverse=True)
     
     def top_losses(self, k:int=None, largest=True):

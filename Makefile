@@ -172,7 +172,7 @@ test-fast: ## run tests in parallel (requires pip install pytest-xdist)
 	pytest -n 3
 
 test-full: ## run all tests, including slow ones, print summary
-	pytest --runslow -ra
+	pytest --runslow -ra --testapireg
 
 test-cpu: ## run tests with the default python and CUDA_VISIBLE_DEVICES=""
 	CUDA_VISIBLE_DEVICES="" python setup.py --quiet test
@@ -346,7 +346,7 @@ changes-finalize: ## fix the version and stamp the date
 
 changes-dev-cycle: ## insert new template + version
 	@echo "\n\n*** [$(cur_branch)] Install new template + version in CHANGES.md"
-	perl -0777 -pi -e 's|^(##)|\n\n## $(version) (Work In Progress)\n\n### New:\n\n### Changed:\n\n### Fixed:\n\n\n\n$$1|ms' CHANGES.md
+	perl -0777 -pi -e 's|^(##)|## $(version) (Work In Progress)\n\n### New:\n\n### Changed:\n\n### Fixed:\n\n\n\n$$1|ms' CHANGES.md
 
 
 ##@ Version bumping

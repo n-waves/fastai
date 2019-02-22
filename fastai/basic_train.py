@@ -4,12 +4,14 @@ from .basic_data import *
 from .callback import *
 from .data_block import *
 from .utils.mem import gpu_mem_restore
+import inspect
 
 __all__ = ['Learner', 'LearnerCallback', 'Recorder', 'RecordOnCPU', 'fit', 'loss_batch', 'train_epoch', 'validate',
            'get_preds', 'load_learner']
 
 defaults.lr = slice(3e-3)
 defaults.wd = 1e-2
+defaults.extra_callbacks = None
 
 def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None, opt:OptOptimizer=None,
                cb_handler:Optional[CallbackHandler]=None)->Tuple[Union[Tensor,int,float,str]]:
@@ -26,10 +28,8 @@ def loss_batch(model:nn.Module, xb:Tensor, yb:Tensor, loss_func:OptLossFunc=None
     if opt is not None:
         loss = cb_handler.on_backward_begin(loss)
         loss.backward()
-        cb_handler.on_backward_end()
-        opt.step()
-        cb_handler.on_step_end()
-        opt.zero_grad()
+        if not cb_handler.on_backward_end(): opt.step()
+        if not cb_handler.on_step_end():     opt.zero_grad()
 
     return loss.detach().cpu()
 
@@ -174,6 +174,7 @@ class Learner():
         if not getattr(self, 'opt', False): self.create_opt(lr, wd)
         else: self.opt.lr,self.opt.wd = lr,wd
         callbacks = [cb(self) for cb in self.callback_fns] + listify(callbacks)
+        if defaults.extra_callbacks is not None: callbacks += defaults.extra_callbacks
         fit(epochs, self.model, self.loss_func, opt=self.opt, data=self.data, metrics=self.metrics,
             callbacks=self.callbacks+callbacks)
 
@@ -205,7 +206,7 @@ class Learner():
         self.freeze_to(0)
         self.create_opt(defaults.lr)
 
-    def export(self, fname:str='export.pkl'):
+    def export(self, fname:str='export.pkl', destroy=False):
         "Export the state of the `Learner` in `self.path/fname`."
         args = ['opt_func', 'loss_func', 'metrics', 'true_wd', 'bn_wd', 'wd', 'train_bn', 'model_dir', 'callback_fns']
         state = {a:getattr(self,a) for a in args}
@@ -213,17 +214,13 @@ class Learner():
         #layer_groups -> need to find a way
         #TO SEE: do we save model structure and weights separately?
         device = one_param(self.model).device
-        state['model'] = self.model.cpu() #This is done inplace so we need to put the model back where it was after the save.
+        state['model'] = self.model.cpu() # This is done inplace so we need to put the model back where it was after the save.
         xtra = dict(normalize=self.data.norm.keywords) if getattr(self.data, 'norm', False) else {}
         state['data'] = self.data.valid_ds.get_state(**xtra)
         state['cls'] = self.__class__
         torch.save(state, open(self.path/fname, 'wb'))
         self.model.to(device)
-
-    def hibernate(self, fname:str='export.pkl'):
-        "Export the state of the `Learner` in `self.path/fname` and remove the object from memory. Use load_learner() to restore."
-        self.export(self, fname)
-        self.destroy()
+        if destroy: self.destroy()
 
     def save(self, name:PathOrStr, return_path:bool=False, with_opt:bool=True):
         "Save model and optimizer state (if `with_opt`) with `name` to `self.model_dir`."
@@ -258,15 +255,20 @@ class Learner():
 
     def destroy(self):
         "Free the Learner internals, leaving just an empty shell that consumes no memory"
+
+        class ZombieLearner(Learner):
+            msg = "this object has been destroyed"
+            def __getattr__(self, item):    print(ZombieLearner.msg); return None
+            def destroyed(*args, **kwargs): print(ZombieLearner.msg)
+
         attrs = [k for k in self.__dict__.keys() if not k.startswith("__")]
         for a in attrs: delattr(self, a)
+        # the instance methods can still be called, but will just give a message
+        methods = [k for k in dir(self) if not k.startswith("__") and inspect.isroutine(getattr(self, k))]
+        for m in methods: setattr(self, m, ZombieLearner.destroyed)
+        self.__class__ = ZombieLearner
         gc.collect()
         print("this Learner object self-destroyed - it still exists, but no longer usable")
-        # in case someone tries to call methods on this destroyed object
-        def _catch_all_destroyed(self, name):
-            def method(*args, **kwargs): print("this object has been destroyed")
-            return method
-        self.__getattr__ = _catch_all_destroyed
 
     def purge(self, clear_opt:bool=True):
         "Purge the `Learner` of all cached attributes to release some GPU memory."
@@ -470,20 +472,33 @@ class Recorder(LearnerCallback):
             axs[1].set_ylabel('Momentum')
         else: plt.plot(iterations, self.lrs)
 
-    def plot(self, skip_start:int=10, skip_end:int=5)->None:
+    @staticmethod
+    def smoothen_by_spline(xs, ys, **kwargs):
+        xs = np.arange(len(ys))
+        spl = scipy.interpolate.UnivariateSpline(xs, ys, **kwargs)
+        ys = spl(xs)
+        return ys
+
+    def plot(self, skip_start:int=10, skip_end:int=5, suggestion:bool=False, **kwargs)->None:
         "Plot learning rate and losses, trimmed between `skip_start` and `skip_end`. Optionally plot and return min gradient"
         lrs = self.lrs[skip_start:-skip_end] if skip_end > 0 else self.lrs[skip_start:]
         losses = self.losses[skip_start:-skip_end] if skip_end > 0 else self.losses[skip_start:]
+        losses = [x.item() for x in losses]
+        if 'k' in kwargs: losses = self.smoothen_by_spline(lrs, losses, **kwargs)
         _, ax = plt.subplots(1,1)
         ax.plot(lrs, losses)
         ax.set_ylabel("Loss")
         ax.set_xlabel("Learning Rate")
         ax.set_xscale('log')
         ax.xaxis.set_major_formatter(plt.FormatStrFormatter('%.0e'))
-        mg = (np.gradient(np.array([x.item() for x in losses]))).argmin()
-        print(f"Min numerical gradient: {lrs[mg]:.2E}")
-        ax.plot(lrs[mg],losses[mg],markersize=10,marker='o',color='red')
-        self.min_grad_lr = lrs[mg]
+        if suggestion:
+            try: mg = (np.gradient(np.array(losses))).argmin()
+            except:
+                print("Failed to compute the gradients, there might not be enough points.")
+                return
+            print(f"Min numerical gradient: {lrs[mg]:.2E}")
+            ax.plot(lrs[mg],losses[mg],markersize=10,marker='o',color='red')
+            self.min_grad_lr = lrs[mg]
 
     def plot_losses(self, last:int=None)->None:
         "Plot training and validation losses."
