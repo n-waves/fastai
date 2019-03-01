@@ -212,6 +212,7 @@ def language_model_learner(data:DataBunch, arch, config:dict=None, drop_mult:flo
 
 class MultiBatchEncoder(nn.Module):
     "Create an encoder over `module` that can process a full sentence."
+    _version = 2
     def __init__(self, bptt:int, max_len:int, module:nn.Module):
         super().__init__()
         self.max_len,self.bptt,self.module = max_len,bptt,module
@@ -233,6 +234,17 @@ class MultiBatchEncoder(nn.Module):
                 raw_outputs.append(r)
                 outputs.append(o)
         return self.concat(raw_outputs), self.concat(outputs)
+
+    def _load_from_state_dict(self, state_dict, prefix, metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        keys = list(state_dict.keys())
+        if metadata.get("version", None) == 1:
+            if "0.encoder.weight" in keys and not "0.module.encoder.weight" in keys:
+                for k in keys:
+                    if k.startswith("0.") and not k.startswith("0.module"):
+                        nk = f"0.module.{k.lstrip('0.')}"
+                        state_dict[nk] = state_dict.pop(k)
+        super(MultiBatchEncoder, self)._load_from_state_dict(state_dict, prefix, metadata, strict, missing_keys,
+                                                             unexpected_keys, error_msgs)
     
 def get_text_classifier(arch:Callable, vocab_sz:int, n_class:int, bptt:int=70, max_len:int=20*70, config:dict=None, 
                         drop_mult:float=1., lin_ftrs:Collection[int]=None, ps:Collection[float]=None) -> nn.Module:
