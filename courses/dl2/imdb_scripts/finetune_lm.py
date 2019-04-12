@@ -74,42 +74,42 @@ def train_lm(dir_path, pretrain_path, cuda_id=0, cl=25, pretrain_id='wt103', lm_
     opt_fn = partial(optim.Adam, betas=(0.8, 0.99))
 
 ###
-#    if backwards:
-#        trn_lm_path = dir_path / 'tmp' / f'trn_{joined_id}{IDS}{train_file_id}_bwd.npy'
-#        val_lm_path = dir_path / 'tmp' / f'val_{joined_id}{IDS}_bwd.npy'
-#    else:
-#        trn_lm_path = dir_path / 'tmp' / f'trn_{joined_id}{IDS}{train_file_id}.npy'
-#        val_lm_path = dir_path / 'tmp' / f'val_{joined_id}{IDS}.npy'
+    if backwards:
+        trn_lm_path = dir_path / 'tmp' / f'trn_{joined_id}{IDS}{train_file_id}_bwd.npy'
+        val_lm_path = dir_path / 'tmp' / f'val_{joined_id}{IDS}_bwd.npy'
+    else:
+        trn_lm_path = dir_path / 'tmp' / f'trn_{joined_id}{IDS}{train_file_id}.npy'
+        val_lm_path = dir_path / 'tmp' / f'val_{joined_id}{IDS}.npy'
 ###
-    with open(dir_path / 'tmp' / f'train.txt', 'r') as f:
-        rows = [line.split('\t') for line in f.readlines()]
-    sentences = [row[0] for row in rows]
+#    with open(dir_path / 'tmp' / f'train.txt', 'r') as f:
+#        rows = [line.split('\t') for line in f.readlines()]
+#    sentences = [row[0] for row in rows]
+#
+#    trn_sent, val_sent = train_test_split(sentences, test_size=0.1, random_state=12345)
+#
+#    spp = sp.SentencePieceProcessor()
+#    spp.Load(str(dir_path / 'tmp' / sentence_piece_model))
+#    spp.SetEncodeExtraOptions("bos:eos:reverse" if backwards else "bos:eos")
+#    vs = spp.GetPieceSize()
 
-    trn_sent, val_sent = train_test_split(sentences, test_size=0.1, random_state=12345)
-
-    spp = sp.SentencePieceProcessor()
-    spp.Load(str(dir_path / 'tmp' / sentence_piece_model))
-    spp.SetEncodeExtraOptions("bos:eos:reverse" if backwards else "bos:eos")
-    vs = spp.GetPieceSize()
-
-    #print(f'Loading {trn_lm_path} and {val_lm_path}')
-    #trn_lm = np.load(trn_lm_path)
+    print(f'Loading {trn_lm_path} and {val_lm_path}')
+    trn_lm = np.load(trn_lm_path)
     #if trn_lm.ndim > 1:
-    #trn_lm = np.concatenate(trn_lm)
-    #val_lm = np.load(val_lm_path)
-    #val_lm = np.concatenate(val_lm)
-    val_lm = parallel_encode(spp, val_sent, shuffle=False, sample=False)
-    trn_lm = parallel_encode(spp, trn_sent, shuffle=True, sample=False)
+    trn_lm = np.concatenate(trn_lm)
+    val_lm = np.load(val_lm_path)
+    val_lm = np.concatenate(val_lm)
+    #val_lm = parallel_encode(spp, val_sent, shuffle=False, sample=False)
+    #trn_lm = parallel_encode(spp, trn_sent, shuffle=True, sample=False)
 
     if bpe:
         vs=30002
     elif sentence_piece_model != '':
-        #spp = sp.SentencePieceProcessor()
-        #spp.Load(str(dir_path / 'tmp' / sentence_piece_model))
-        #vs = spp.GetPieceSize() #len(itos)
-        #tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split(' ')) + (val_lm == EOS_ID).sum())
-        #print(f'Tokens to words fraction: {tokens_fraction}')
-        pass
+        spp = sp.SentencePieceProcessor()
+        spp.Load(str(dir_path / 'tmp' / sentence_piece_model))
+        vs = spp.GetPieceSize() #len(itos)
+        tokens_fraction = float(len(val_lm)) / (len(spp.DecodeIds(val_lm.tolist()).split(' ')) + (val_lm == EOS_ID).sum())
+        print(f'Tokens to words fraction: {tokens_fraction}')
+        #pass
     else:
         itos = pickle.load(open(dir_path / 'tmp' / 'itos.pkl', 'rb'))
         vs = len(itos)
